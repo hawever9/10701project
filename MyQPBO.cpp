@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <numeric>
 #include <math.h>
+#include "omp.h"
 #include "QPBO.h"
 
 #include <iostream>
@@ -9,6 +10,11 @@
 #include <string>
 #include <vector>
 #include <random>
+#include <algorithm>
+#include <numeric>
+#include <future>
+#include <cstdlib>
+
 
 using namespace std;
 
@@ -16,19 +22,26 @@ typedef int CircleId;
 typedef int NodeId;
 
 double d_k_e (CircleId k, NodeId x, NodeId y,
-              vector< vector<int> > CIRCLE, vector<double> ALPHA) {
+              const vector<vector<int> >& CIRCLE, const vector<double>& ALPHA) {
     int delta_e = (CIRCLE[k][x] == 1 && CIRCLE[k][y] == 1) ? 1 : 0;
-    return (delta_e - ALPHA[k] * (1 - delta_e));
+    double result = (delta_e - ALPHA[k] * (1 - delta_e));
+    return result;
 }
 
 int phi_dot_theta_k (CircleId k, NodeId x, NodeId y,
-                     vector< vector < vector<int> > > PHI, vector< vector<int> > THETA) {
-    return (std::inner_product(PHI[x][y].begin(), PHI[x][y].end(), THETA[k].begin(), 0));
+                     const vector<vector <vector<int> > >& PHI,
+                     const vector<vector<int> >& THETA) {
+    int result = (inner_product(PHI[x][y].begin(), PHI[x][y].end(),
+                          THETA[k].begin(), 0));
+    return result;
 }
 
 double o_k_e (CircleId k, NodeId x, NodeId y, int K,
-              vector< vector<int> > CIRCLE, vector<double> ALPHA, vector< vector < vector<int> > > PHI, vector< vector<int> > THETA) {
+              const vector<vector<int> >& CIRCLE, const vector<double>& ALPHA,
+              const vector<vector <vector<int> > >& PHI,
+              const vector<vector<int> >& THETA) {
     double result = 0;
+    #pragma omp parallel for
     for (CircleId i = 0; i < K; i++)
     {
         if (i != k) {
@@ -39,42 +52,55 @@ double o_k_e (CircleId k, NodeId x, NodeId y, int K,
     return result;
 }
 
-double negPairWiseE (int dx, int dy, CircleId k, NodeId x, NodeId y, int K,
-                     vector< vector<int> > EDGE, vector< vector<int> > CIRCLE, vector<double> ALPHA,
-                     vector< vector < vector<int> > > PHI, vector< vector<int> > THETA) {
-    double result = o_k_e(k, x, y, K, CIRCLE, ALPHA, PHI, THETA);
-    if (dx == 1 && dy == 1)
-    {
-        result += phi_dot_theta_k(k, x, y, PHI, THETA);
-    }
-    else {
-        result -= ALPHA[k] * phi_dot_theta_k(k, x, y, PHI, THETA);
-    }
+tuple<double, double, double> negPairWiseE (CircleId k, NodeId x, NodeId y, int K,
+                     const vector<vector<int> >& EDGE,
+                     const vector<vector<int> >& CIRCLE,
+                     const vector<double>& ALPHA,
+                     const vector<vector <vector<int> > >& PHI,
+                     const vector<vector<int> >& THETA) {
+    double result[3];
+    result[0] = o_k_e(k, x, y, K, CIRCLE, ALPHA, PHI, THETA);
+    result[1] = phi_dot_theta_k(k, x, y, PHI, THETA);
+    result[2] = result[0] + result[1];
     if (EDGE[x][y] == 1)
     {
-        result -= log(1 + exp(result));
+        result[2] -= log(1 + exp(result[2]));
     }
     else {
-        result = -log(1 + exp(result));
+        result[2] = -log(1 + exp(result[2]));
     }
-    return (-result);
+    result[2] = -result[2];
+    return make_tuple(result[0], result[1], result[2]);
+    // if (dx == 1 && dy == 1)
+    // {
+    //     result += phi_dot_theta_k(k, x, y, PHI, THETA);
+    // }
+    // else {
+    //     result -= ALPHA[k] * phi_dot_theta_k(k, x, y, PHI, THETA);
+    // }
+    // if (EDGE[x][y] == 1)
+    // {
+    //     result -= log(1 + exp(result));
+    // }
+    // else {
+    //     result = -log(1 + exp(result));
+    // }
+    // return (-result);
 }
 
 
 
-int main()
+int main(int argc, char const *argv[])
 {
-    cout << "Type in K: ";
-    int K;
-    cin >> K;
-    cout << endl;
+    omp_set_num_threads(2);
+    int K = atoi(argv[3]);
 
     typedef double REAL;
     QPBO<REAL>* q;
-    vector< vector<int> > EDGE;
-    vector< vector < vector<int> > > PHI;
+    vector<vector<int> > EDGE;
+    vector<vector <vector<int> > > PHI;
 
-    ifstream edgeTXT("EDGE.txt");
+    ifstream edgeTXT(argv[1]);
     string line;
     int i, M = 0;
     while(getline(edgeTXT, line)) {
@@ -90,7 +116,7 @@ int main()
 
     int N = EDGE.size();
 
-    ifstream phiTXT("PHI_.txt");
+    ifstream phiTXT(argv[2]);
     int count = 0;
     int F;
     vector < vector<int> > phi;
@@ -110,7 +136,7 @@ int main()
     }
     phiTXT.close();
 
-    cout << "N: " << N << " M: " << M << " F: " << F << endl;
+    cout << "Nodes: " << N << " Edges: " << M << " Features: " << F << endl;
 
     ofstream circleTXT("CIRCLE.txt");
     for (CircleId k = 0; k < K; k ++)
@@ -119,7 +145,8 @@ int main()
         {
             circleTXT << "0 ";
         }
-        circleTXT << endl;
+        circleTXT.flush();
+        if (k != K - 1) circleTXT << endl;
     }
 
 
@@ -133,7 +160,8 @@ int main()
         {
             thetaTXT << distribution(generator) << " ";
         }
-        thetaTXT << endl;
+        thetaTXT.flush();
+        if (k != K - 1) thetaTXT << endl;
     }
 
     ofstream alphaTXT("ALPHA.txt");
@@ -141,7 +169,7 @@ int main()
     {
         alphaTXT << 1.0 << " ";
     }
-    alphaTXT << endl;
+
 
 
     char c;
@@ -185,26 +213,43 @@ int main()
         q = new QPBO<REAL>(K * N, K * M); // max number of nodes & edges
         q->AddNode(K * N); // add nodes
 
-        for (CircleId k = 0; k < K; k++)
-        {
-            for (NodeId x = 0; x < N; x++)
+        #pragma omp parallel for collapse(3) shared(q)
+            for (CircleId k = 0; k < K; k++)
             {
-                for (NodeId y = 0; y < N; y++)
+                for (NodeId x = 0; x < N; x++)
                 {
-                    if (x == y) continue;
-                    double E_0_0 = negPairWiseE (0, 0, k, x, y, K,
-                                                 EDGE, CIRCLE, ALPHA, PHI, THETA);
-                    double E_0_1 = negPairWiseE (0, 1, k, x, y, K,
-                                                 EDGE, CIRCLE, ALPHA, PHI, THETA);
-                    double E_1_0 = negPairWiseE (1, 0, k, x, y, K,
-                                                 EDGE, CIRCLE, ALPHA, PHI, THETA);
-                    double E_1_1 = negPairWiseE (1, 1, k, x, y, K,
-                                                 EDGE, CIRCLE, ALPHA, PHI, THETA);
-                    q->AddPairwiseTerm(k * N + x, k * N + y,
-                                       E_0_0, E_0_1, E_1_0, E_1_1);
+                    for (NodeId y = 0; y < N; y++)
+                    {
+                        if (x == y) continue;
+                        double energy0, energy1, energy2;
+                        tie(energy0, energy1, energy2) =
+                            negPairWiseE (k, x, y, K,
+                                        EDGE, CIRCLE, ALPHA, PHI, THETA);
+
+                        double E_1_1 = energy2;
+                        double E_0_0 = energy0 - ALPHA[k] * energy1;
+                        if (EDGE[x][y] == 1)
+                        {
+                            E_0_0 -= log(1 + exp(E_0_0));
+                        }
+                        else {
+                            E_0_0 = -log(1 + exp(E_0_0));
+                        }
+                        E_0_0 = -E_0_0;
+                        // double E_0_1 = negPairWiseE (0, 1, k, x, y, K,
+                        //                              EDGE, CIRCLE, ALPHA, PHI, THETA);
+                        // double E_1_0 = negPairWiseE (1, 0, k, x, y, K,
+                        //                              EDGE, CIRCLE, ALPHA, PHI, THETA);
+                        // double E_1_1 = negPairWiseE (1, 1, k, x, y, K,
+                        //                              EDGE, CIRCLE, ALPHA, PHI, THETA);
+                        #pragma omp critical
+                        {
+                            q->AddPairwiseTerm(k * N + x, k * N + y,
+                                               E_0_0, E_0_0, E_0_0, E_1_1);
+                        }
+                    }
                 }
             }
-        }
 
         q->Solve();
         q->ComputeWeakPersistencies();
@@ -220,6 +265,7 @@ int main()
                 OcircleTXT << label_k_v << " ";
                 if (label_k_v != CIRCLE[k][v]) change = true;
             }
+            OcircleTXT.flush();
             if (k != K - 1) OcircleTXT << endl;
         }
 
